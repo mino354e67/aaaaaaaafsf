@@ -2,8 +2,6 @@
 
 在 OpenWrt 上运行的 IPQuality 定制版，基于 [xykt/IPQuality](https://github.com/xykt/IPQuality) `ip.sh` 的 2026-09-16 版本修改。源项目及本衍生版本按 GNU AGPL-3.0 授权；详见仓库根目录 `LICENSE`。
 
-> 状态：已做源代码静态检查；**尚未在你的 NanoPi R3S / OpenWrt 25.12.5 真实设备上执行完整检测**。
-
 ## 与原版的差别
 
 - **禁用访问次数统计**（不请求 `hits.xykt.de`）。
@@ -67,4 +65,3 @@ rm -f /tmp/ipquality-openwrt.sh
 
 - 上游：https://github.com/xykt/IPQuality
 - 基于上游 2026-09-16 版；保留原始许可 `LICENSE`。
-- 本仓库为独立公开副本，原先 `sgproxy` 的独立分支不受影响。

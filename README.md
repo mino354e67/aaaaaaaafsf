@@ -22,7 +22,7 @@
 OpenWrt 25.12 使用 `apk`，首次安装依赖（一行）：
 
 ```sh
-apk add bash curl jq bc bind-dig coreutils-od
+apk add bash curl jq bc bind-dig coreutils-od coreutils-timeout
 ```
 
 确认其余工具存在（一行）：

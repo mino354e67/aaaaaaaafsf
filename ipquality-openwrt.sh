@@ -2417,7 +2417,7 @@ esac
 fi
 }
 if [[ "${1:-}" == "-h" ]];then show_help; fi
-for dep in bash curl jq bc nc dig ip od timeout xargs; do if ! command -v "$dep" >/dev/null 2>&1; then echo "Missing required command: $dep (OpenWrt: apk add bash curl jq bc bind-dig coreutils-od)" >&2; exit 2; fi; done
+for dep in bash curl jq bc nc dig ip od timeout xargs; do if ! command -v "$dep" >/dev/null 2>&1; then echo "Missing required command: $dep (OpenWrt: apk add bash curl jq bc bind-dig coreutils-od coreutils-timeout)" >&2; exit 2; fi; done
 generate_random_user_agent
 adapt_locale
 read_ref

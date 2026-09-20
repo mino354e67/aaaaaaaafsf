@@ -147,7 +147,6 @@ shead[title]="IP QUALITY CHECK REPORT: "
 shead[title_lite]="IP QUALITY CHECK REPORT(LITE): "
 shead[ver]="Version: $script_version"
 shead[bash]="bash ipquality-openwrt.sh -E"
-shead[git]="https://github.com/xykt/IPQuality"
 shead[time_raw]=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
 shead[time]="Report Time: ${shead[time_raw]}"
 shead[ltitle]=25
@@ -272,7 +271,6 @@ shead[title]="IP质量体检报告："
 shead[title_lite]="IP质量体检报告(Lite)："
 shead[ver]="脚本版本：$script_version"
 shead[bash]="bash ipquality-openwrt.sh"
-shead[git]="https://github.com/xykt/IPQuality"
 shead[time_raw]=$(TZ="Asia/Shanghai" date +"%Y-%m-%d %H:%M:%S CST")
 shead[time]="报告时间：${shead[time_raw]}"
 shead[ltitle]=16
@@ -1654,33 +1652,64 @@ check_email_service $service
 kill_progress_bar
 done
 }
+# DNSBL checks in batches of four; BusyBox xargs -P is not required.
+# Failed DNS responses are not counted as clean results.
 check_dnsbl_parallel(){
-ip_to_check=$1
-parallel_jobs=$2
-smail[t]=0
-smail[c]=0
-smail[m]=0
-smail[b]=0
+local ip_to_check=$1
+local parallel_jobs=${2:-4}
+local reversed_ip zone zones workdir i=0 j
+local clean=0 marked=0 blacklisted=0 errors=0 total=0 result
+[[ $parallel_jobs =~ ^[1-4]$ ]]||parallel_jobs=4
 reversed_ip=$(echo "$ip_to_check"|awk -F. '{print $4"."$3"."$2"."$1}')
-local total=0
-local clean=0
-local blacklisted=0
-local other=0
-curl $CurlARG -sL "${rawgithub}main/ref/dnsbl.list"|sort -u|xargs -P "$parallel_jobs" -I {} bash -c "result=\$(dig +short \"$reversed_ip.{}\" A); if [[ -z \"\$result\" ]]; then echo 'Clean'; elif [[ \"\$result\" =~ ^127\.255\.255\. ]]; then echo 'Clean'; elif [[ \"\$result\" == '127.0.0.2' ]]; then echo 'Blacklisted'; else echo 'Other'; fi"|{
-while IFS= read -r line;do
-((total++))
-case "$line" in
-"Clean")((clean++));;
-"Blacklisted")((blacklisted++));;
-*)((other++))
+zones=$(curl -fsSL --connect-timeout 5 --max-time 15 "${rawgithub}main/ref/dnsbl.list")||{
+echo "DNSBL: unable to fetch zone list" >&2
+return 1
+}
+[[ -n $zones ]]||{ echo "DNSBL: zone list is empty" >&2; return 1; }
+workdir=$(mktemp -d /tmp/ipquality-dnsbl.XXXXXX)||return 1
+while IFS= read -r zone;do
+zone=${zone%$'\r'}
+[[ $zone =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]||continue
+(
+reply=$(dig +time=2 +tries=1 +noall +comments +answer "${reversed_ip}.${zone}" A 2>/dev/null)
+if [[ $reply == *"status: NXDOMAIN"* ]];then
+printf 'clean\n'
+elif [[ $reply == *"status: NOERROR"* ]];then
+addresses=$(printf '%s\n' "$reply"|awk '$4=="A" {print $5}')
+if [[ -z $addresses ]]||grep -Eq '^127\.255\.255\.' <<< "$addresses";then
+printf 'clean\n'
+elif grep -Eq '^127\.0\.0\.2$' <<< "$addresses";then
+printf 'blacklisted\n'
+elif grep -Eq '^127\.' <<< "$addresses";then
+printf 'marked\n'
+else
+printf 'error\n'
+fi
+else
+printf 'error\n'
+fi
+) > "$workdir/$i" &
+((i++))
+if (( i % parallel_jobs == 0 ));then wait;fi
+done <<< "$zones"
+wait
+if (( i == 0 ));then
+rm -rf -- "$workdir"
+echo "DNSBL: no valid zones in list" >&2
+return 1
+fi
+for ((j=0;j<i;j++));do
+IFS= read -r result < "$workdir/$j"
+case "$result" in
+clean)((clean++));;
+marked)((marked++));;
+blacklisted)((blacklisted++));;
+*)((errors++));;
 esac
 done
-smail[t]="$total"
-smail[c]="$clean"
-smail[m]="$other"
-smail[b]="$blacklisted"
-echo "${smail[t]} ${smail[c]} ${smail[m]} ${smail[b]}"
-}
+rm -rf -- "$workdir"
+total=$((clean+marked+blacklisted))
+printf '%d %d %d %d %d\n' "$total" "$clean" "$marked" "$blacklisted" "$errors"
 }
 check_dnsbl(){
 local temp_info="$Font_Cyan$Font_B${sinfo[dnsbl]} $Font_Suffix"
@@ -1688,12 +1717,27 @@ local temp_info="$Font_Cyan$Font_B${sinfo[dnsbl]} $Font_Suffix"
 show_progress_bar "$temp_info" $((40-1-${sinfo[ldnsbl]}))&
 bar_pid="$!"&&disown "$bar_pid"
 trap "kill_progress_bar" RETURN
-local num_array=($(check_dnsbl_parallel "$IP" 50))
-smail[t]=${num_array[0]:-0}
-smail[c]=${num_array[1]:-0}
-smail[m]=${num_array[2]:-0}
-smail[b]=${num_array[3]:-0}
+local numbers
+if ! numbers=$(check_dnsbl_parallel "$IP" 4);then
+smail[t]=null
+smail[c]=null
+smail[m]=null
+smail[b]=null
+smail[e]=null
+smail[sdnsbl]="$Font_Cyan${smail[dnsbl]} $Font_Yellow 检测失败（不能视为无黑名单记录）$Font_Suffix"
+return
+fi
+local -a num_array
+read -r -a num_array <<< "$numbers"
+smail[t]=${num_array[0]}
+smail[c]=${num_array[1]}
+smail[m]=${num_array[2]}
+smail[b]=${num_array[3]}
+smail[e]=${num_array[4]}
 smail[sdnsbl]="$Font_Cyan${smail[dnsbl]}  ${smail[available]}${smail[t]}   ${smail[clean]}${smail[c]}   ${smail[marked]}${smail[m]}   ${smail[blacklisted]}${smail[b]}$Font_Suffix"
+if (( smail[e] > 0 ));then
+smail[sdnsbl]+="  查询失败 ${smail[e]}（未计入有效数）"
+fi
 }
 show_head(){
 echo -ne "\r$(printf '%72s'|tr ' ' '#')\n"
@@ -1714,8 +1758,6 @@ calc_padding "$(printf '%*s' "${shead[ltitle_lite]}" '')$IPhide" 72
 echo -ne "\r$PADDING$Font_B${shead[title_lite]}$Font_Cyan$IPhide$Font_Suffix\n"
 fi
 fi
-calc_padding "${shead[git]}" 72
-echo -ne "\r$PADDING$Font_U${shead[git]}$Font_Suffix\n"
 calc_padding "${shead[bash]}" 72
 echo -ne "\r$PADDING${shead[bash]}\n"
 echo -ne "\r${shead[ptime]}${shead[time]}  ${shead[ver]}\n"
@@ -2160,7 +2202,6 @@ else
 head_updates+=".Head |= . + { IP: \"${IPhide:-null}\" } | "
 fi
 head_updates+=".Head |= . + { Command: \"${shead[bash]:-null}\" } | "
-head_updates+=".Head |= . + { GitHub: \"${shead[git]:-null}\" } | "
 head_updates+=".Head |= . + { Time: \"${shead[time_raw]:-null}\" } | "
 head_updates+=".Head |= . + { Version: \"${script_version:-null}\" } | "
 if [ $mode_lite -eq 0 ];then
@@ -2341,6 +2382,7 @@ mail_updates+=".Mail |= . * { DNSBlacklist: { Total: ${smail[t]:-null} } } | "
 mail_updates+=".Mail |= . * { DNSBlacklist: { Clean: ${smail[c]:-null} } } | "
 mail_updates+=".Mail |= . * { DNSBlacklist: { Marked: ${smail[m]:-null} } } | "
 mail_updates+=".Mail |= . * { DNSBlacklist: { Blacklisted: ${smail[b]:-null} } } | "
+mail_updates+=".Mail |= . * { DNSBlacklist: { QueryErrors: ${smail[e]:-null} } } | "
 ipjson=$(echo "$ipjson"|jq "$head_updates$basic_updates$type_updates$score_updates$factor_updates$media_updates$mail_updates.")
 }
 check_IP(){
